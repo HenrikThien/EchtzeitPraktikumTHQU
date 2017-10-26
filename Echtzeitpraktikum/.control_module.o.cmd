@@ -1,0 +1,1 @@
+cmd_/home/gruppeB8/workspace/Echtzeitpraktikum//control_module.o := ld -m elf_x86_64   -r -o /home/gruppeB8/workspace/Echtzeitpraktikum//control_module.o /home/gruppeB8/workspace/Echtzeitpraktikum//Echtzeitpraktikum.o 
