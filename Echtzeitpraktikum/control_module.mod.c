@@ -17,5 +17,5 @@ __attribute__((section(".gnu.linkonce.this_module"))) = {
 static const char __module_depends[]
 __used
 __attribute__((section(".modinfo"))) =
-"depends=rtai_modbus,rtai_sched,rtai_hal";
+"depends=rtai_sem,rtai_modbus,rtai_sched,rtai_mbx,rtai_hal";
 
