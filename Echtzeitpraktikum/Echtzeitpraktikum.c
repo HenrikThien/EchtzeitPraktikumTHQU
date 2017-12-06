@@ -1,8 +1,6 @@
 #include <rtai_mbx.h>
 #include <rtai_sched.h>
-
 #include <rtai_sem.h>
-
 #include <uint128.h>
 #include <sys/rtai_modbus.h>
 
@@ -19,7 +17,7 @@ MODULE_LICENSE("GPL");
 #define DREHTELLER_IN_POS (1 << 5)
 #define PRUEFER_NORMALLAGE (1 << 6)
 
-//aktoren
+// aktoren
 #define BOHRER_AN (1 << 0)
 #define DREHTELLER_AN (1 << 1)
 #define BOHRER_RUNTER (1 << 2)
@@ -94,6 +92,7 @@ static int maskAllBits(short mask, int masktype) {
 
 static void initProgram(void) {
 	short val;
+	int cmd, i;
 
 	// array auf 0 setzen (keine teile auf dem teller)
 	teile_pos[0] = 0;
@@ -118,6 +117,15 @@ static void initProgram(void) {
 
 	// ausgang zurücksetzen
 	maskAllBits(AUSWERFER_AUSGANG, type_rem);
+
+	for(i = 0; i < 5; i++) {
+		rt_mbx_send(&mbox[ausgang_mbox], &cmd, sizeof(cmd));
+		rt_mbx_receive(&mbox[control_mbox], &cmd, sizeof(cmd));
+		rt_mbx_send(&mbox[drehteller_mbox], &cmd, sizeof(cmd));
+		rt_mbx_receive(&mbox[control_mbox], &cmd, sizeof(cmd));
+	}
+	rt_mbx_send(&mbox[ausgang_mbox], &cmd, sizeof(cmd));
+	rt_mbx_receive(&mbox[control_mbox], &cmd, sizeof(cmd));
 }
 
 static void control(long x) {
@@ -141,12 +149,13 @@ static void control(long x) {
 
 	// tasks starten
 	rt_task_resume(&task_drehteller);
+	rt_task_resume(&task_ausgang);
 	rt_task_resume(&task_pruefer);
 	rt_task_resume(&task_bohrer);
-	rt_task_resume(&task_ausgang);
 
 	// programm initialisieren
 	initProgram();
+
 
 	while (1) {
 		// einlesen der Werte vom Sensor
@@ -213,10 +222,6 @@ static void control(long x) {
 		for (k = 0; k < messages_send; k++) {
 			rt_mbx_receive(&mbox[control_mbox], &cmd, sizeof(cmd));
 
-			if (cmd == mbox_bohrer) {
-				//auswerfen = 1;
-			}
-
 			if (cmd == mbox_pruefer_wrong) {
 				// 2 = "falsches" teil (also falsch herum)
 				teile_pos[1] = 2;
@@ -225,6 +230,7 @@ static void control(long x) {
 
 
 		messages_send = 0;
+		rt_sleep(100 * nano2count(1000000));
 	}
 
 	rt_modbus_disconnect(fd_node);
@@ -276,9 +282,6 @@ static void bohrer(long x) {
 		rt_mbx_receive(&mbox[bohrer_mbox], &mbox_val, sizeof(mbox_val));
 		rt_printk("bohrer: message received\n");
 
-		// bohrer hochfahren stoppen
-		maskAllBits(BOHRER_HOCH, type_rem);
-
 		/* bohrer festhalten einschalten
 		   bohrer runter fahren starten
 		   bohrer anschalten
@@ -305,6 +308,9 @@ static void bohrer(long x) {
 			rt_sleep(100 * nano2count(1000000));
 			rt_modbus_get(fd_node, DIGITAL_IN, 0, &val);
 		} while ((val & BOHRER_OBEN) != BOHRER_OBEN);
+
+		// bohrer hochfahren stoppen
+		maskAllBits(BOHRER_HOCH, type_rem);
 
 		mbox_val = mbox_bohrer;
 		rt_mbx_send(&mbox[control_mbox], &mbox_val, sizeof(mbox_val));
@@ -437,29 +443,49 @@ my_init(void) {
 
 	if (rt_task_init(&task_drehteller, drehteller, 0, STACKSIZE, 0, 0, NULL)) {
 		printk("cannot initialize drehteller task\n");
-		goto fail;
+		goto fail1;
 	}
 
 	if (rt_task_init(&task_pruefer, pruefer, 0, STACKSIZE, 0, 0, NULL)) {
 		printk("cannot initialize pruefer task\n");
-		goto fail;
+		goto fail2;
 	}
 
 	if (rt_task_init(&task_bohrer, bohrer, 0, STACKSIZE, 0, 0, NULL)) {
 		printk("cannot initialize bohrer task\n");
-		goto fail;
+		goto fail3;
 	}
 
 	if (rt_task_init(&task_ausgang, ausgang, 0, STACKSIZE, 0, 0, NULL)) {
 		printk("cannot initialize ausgang task\n");
-		goto fail;
+		goto fail4;
 	}
 
 	rt_task_resume(&task_control);
 	printk("control task loaded\n");
 	return (0);
 
-	fail: stop_rt_timer();
+	// tasks löschen, entgegengesetzt
+
+	fail4:
+	rt_task_delete(&task_bohrer);
+	fail3:
+	rt_task_delete(&task_pruefer);
+	fail2:
+	rt_task_delete(&task_drehteller);
+	fail1:
+	rt_task_delete(&task_control);
+
+	fail:
+	// semaphore löschen
+	rt_sem_delete(&sem);
+
+	// mbx löschen
+	for (i = 0; i < MBX_COUNT; i++) {
+		rt_mbx_delete(&mbox[i]);
+	}
+
+	stop_rt_timer();
 	return (1);
 }
 
